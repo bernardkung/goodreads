@@ -1,196 +1,330 @@
-
-
-## Initialization
 library(tidyverse)
 library(stringr)
+library(rvest)
+library(httr)
+library(gridExtra)
 
-setwd("F:/Media/Google Drive/GitHub/goodreads")
-
-gr_raw <- read_csv("goodreads_library_export.csv")
-
+#importing data
+setwd("goodreads")
+gr_raw <- read_csv("https://raw.githubusercontent.com/bernardkung/goodreads/master/goodreads_library_export.csv")
 gr <- gr_raw
-
-# Considerations at this point:
-# Clean up the ISBN and ISBN13 columns. Import misread some formatting(?) data as characters and I want to isolate the numbers
-# Prune columns that are empty and not interesting to me (e.g. Condition, Spoiler, etc)
-# Augment data with columns that would be interesting (e.g. Genre)
-
-### Excising empty/uninteresting columns
-gr <- select(gr, 1:10, 12:16, 19)
-
-### Cleaning up column names
-names(gr) <- gsub(x = names(gr), pattern = " ", replacement = "")
-
-### Binning date read by year
-gr$YearRead <- substr(gr$DateRead, 1,4)
+head(gr)
+names(gr)
 
 
-### Cleaning ISBNs
-# type1: ="0802142990"
-# type2: =""
+#fix dataframe
+gr2 <- select(gr, 1:10, 12:16, 19)
+names(gr2) <- gsub(x = names(gr2), pattern = " ", replacement = "")
+gr2$YearRead <- substr(gr2$DateRead, 1,4)
+names(gr2)
 
-# Checking ISBN lengths for consistency
-# unique(sapply(gr$ISBN, nchar))
-# unique(sapply(gr$ISBN13, nchar))
+#check ISBN
+head(gr2$ISBN)
 
-# Re-writes with extracted digits or NAs out of ISBN and ISBN13
-gr$ISBN <- str_extract(gr$ISBN, "[[:digit:]]+")
-gr$ISBN13 <- str_extract(gr$ISBN13, "[[:digit:]]+")
+unique(sapply(gr2$ISBN, nchar))
+unique(sapply(gr2$ISBN13, nchar))
 
-### Filter out to-read books
-gr <- filter(gr, ExclusiveShelf == "read")
+# fix ISBN
+gr3 <- gr2
+gr3$ISBN <- str_extract(gr2$ISBN, "[[:digit:]]+")
+gr3$ISBN13 <- str_extract(gr2$ISBN13, "[[:digit:]]+")
+head(gr3$ISBN)
 
-##
-## Scraping genres with gr_scrape.R
-##
+#filter Read books only
+gr4 <- filter(gr3, ExclusiveShelf == "read")
 
-gr_title_genre <- gr[, 1:2] %>% left_join(genre_df, by = "BookId")
 
-gr_full <-gr %>% left_join(genre_df, by = "BookId")
-# gr_backup <- gr_full
-write.csv(file="gr_backup.csv", x=gr_backup)
+# Sample Scrape Loop
+# 
+# genre_list <- list()
+# 
+# for (i in 1:5) {
+#   url_base <- 'https://www.goodreads.com/book/show/'                  # Sets base URL
+#   url <- paste(url_base, gr4[i,]$BookId, sep = "")                    # paste final URL together and read HTML
+#   xurl <- GET(url, add_headers('user-agent' = 'r'))
+#   webpage <- read_html(url)                                                         
+#   genre_data_html <- html_nodes(webpage, '.bookPageGenreLink')        # use CSS selectors to scrape genre links
+#   genre_vect <- html_text(genre_data_html)                            # convert html data to text
+#   
+#   genre_list[[i]] <- genre_vect                                
+# }
+#
+#genre_list
 
-# Let's take a look at the scraped genres
-genres <- gr_full %>%
+# Full Scrape Loop
+# 
+# # Initialize variables
+# genre_df <- data.frame(BookId = numeric(nrow(gr)), Genre = character(nrow(gr)), stringsAsFactors = FALSE)
+# 
+# Sys.time()
+# start <- 1
+# end <- nrow(gr)
+# pb <- txtProgressBar(min = start, max = end, style = 3)                             # text based progress bar
+# 
+# for (i in start:end) {
+#   url_base <- 'https://www.goodreads.com/book/show/'                                # Sets base URL
+#   url <- paste(url_base, gr[i,]$BookId, sep = "")                                   # paste final URL together and read HTML
+#   xurl <- GET(url, add_headers('user-agent' = 'r'))
+#   webpage <- read_html(url)                                                         
+#   genre_data_html <- html_nodes(webpage, '.bookPageGenreLink')                      # use CSS selectors to scrape genre links
+#   genre_vect <- html_text(genre_data_html)                                          # convert html data to text
+#   
+#   genre_df[i, 2] <- genre_vect[1]                                                   # first genre result stored as genre
+#   genre_df[i, 1] <- as.numeric(gr[i,]$BookId)                                       # corresponding BookId
+#   
+#   genre_vect_addId <- c(as.numeric(gr[i,]$BookId), genre_vect)
+#   
+#   Sys.sleep(1)                                                                      # adds delay between requests
+#   setTxtProgressBar(pb, i)
+# }
+# close(pb)
+# Sys.time()
+
+
+#Read scrape data from online CSV
+genre_df_csv <- read_csv("https://raw.githubusercontent.com/bernardkung/goodreads/master/scrapes.csv")
+genre_df <- genre_df_csv[, c(2,4)]
+head(genre_df)
+
+gr5 <-gr4 %>% left_join(genre_df, by = "BookId")
+
+
+# Title errors from importing and exporting
+gr_error <- gr4 %>% left_join(genre_df_csv, by = "BookId")
+names(gr_error)
+gr_error[which(!(gr_error$Title.x %in% gr_error$Title.y)), c("Title.x", "Title.y")]
+
+
+# Stripping out Series
+regex1 <- "\\((.*)\\)"
+regex2 <- ",*[[:space:]]*#\\d.*$"
+regex3 <- ",*[[:space:]]*#"
+
+gr6 <- gr5
+
+
+# Extracting series names out into a new column  
+Series <- str_extract(gr5$Title, regex1) %>%                    # extract entire series based on parentheses
+  gsub(pattern = regex1,replacement =  "\\1")   # remove parentheses
+
+# Removing series name from Title column
+gr6$Title <- gsub(regex1, "", gr_full$Title)
+
+# Extracting number in series into new column
+gr6$Series <- gsub(regex2, "\\2", Series)                       
+
+gr6$SeriesNum <- str_extract(Series, regex2) %>%
+  gsub(pattern = regex3, replacement = "")
+
+
+head(gr6[which(!is.na(gr6$Series)), c("Title", "Series", "SeriesNum")])
+
+
+# anomalies
+gr6[302,c("Title", "Series", "SeriesNum")]      # Includes omnibus novellas/novelettes
+gr6[213,c("Title", "Series", "SeriesNum")]      # Book 3, Part 1
+gr6[130,c("Title", "Series", "SeriesNum")]      # Prequel with unique series numbering
+gr6[252,c("Title", "Series", "SeriesNum")]      # 6 Books stored as one entry, belonging to separate series 
+# row 252 earlier had genre issues as well
+# would probably excise this row, however series info is largely irrelevant
+
+
+# Count genres
+genres <- gr6 %>%
   group_by(Genre) %>%
   tally() %>%
   arrange(desc(n)) %>%
   print(n = Inf)
 
+
 # Just the books with rare genres (n < 4)
-rare_genres <- gr_full %>% 
+rare_genres <- gr6 %>% 
   group_by(Genre) %>%
   tally() %>%
   filter(n <= 4) %>%
   select(Genre)
 
-# Quick Aside:
-# Let's shorten the title lengths
-# Simple and potentially meaningful: extract series names 
-# Complications:
-# sometimes there's a comma before the series number
-# sometimes there isn't a # before the series number
-# sometimes the series number isn't a single number
-
-# Extracting series names out into a new column  
-Series <- str_extract(gr_full$Title, "\\(.*\\)") %>%                    # extract entire series based on parentheses
-                  gsub(pattern = "\\((.*)\\)",replacement =  "\\1")     # remove parentheses
-
-# Removing series name from Title column
-gr_full$Title <- gsub("\\((.*)\\)", "", gr_full$Title)
-
-# Extracting number in series into new column
-gr_full$Series <- gsub(",*[[:space:]]*#\\d.*$", "\\2", Series)     # keep just the series name
-
-gr_full$SeriesNum <- str_extract(Series, ",*[[:space:]]*#\\d.*$") %>%
-  gsub(pattern = ",*[[:space:]]*#", replacement = "")
-
-# anomalies
-gr_full[302,]   # Includes omnibus novellas/nevelettes
-gr_full[213,]   # Book 3, Part 1
-gr_full[130,]   # Prequel with unique series numbering
-gr_full[252,]   # 6 Books stored as one entry, belonging to separate series 
-                # row 252 earlier had genre issues as well
-                # would probably excise this row, however series info is largely irrelevant
-
 # Examine these rare genre books
-subset(gr_full, gr_full$Genre %in% unlist(rare_genres)) %>%
+subset(gr6, gr6$Genre %in% unlist(rare_genres)) %>%
   select(Title, Genre) %>%
-  arrange(Genre) %>%
-  print(n = Inf)
-
-# Wow, women's fiction. Let's just rectify that to Fiction
-gr_full[gr_full$Genre == "Womens Fiction", ]$Genre <- c("Fiction")
-
-# Generalize specific nonfiction genres back to just nonfiction
-nonfiction <- c("Philosophy", "Autobiography", "Biography", "Food and Drink", "Writing")
-gr_full[gr_full$Genre %in% nonfiction, ]$Genre <- c("Nonfiction")
-
-# Manually rectifying some other genres
-gr_full[gr_full$Genre == "Gothic", ]$Genre <- c("Horror")
-gr_full[gr_full$Genre %in% c("Paranormal", "Dungeons and Dragons", "Adventure"), ]$Genre <- c("Fantasy")
-gr_full[gr_full$Genre == "Anthologies", ]$Genre <- c("Science Fiction")
-gr_full[gr_full$Genre == "Sequential Art", ]$Genre <- c("Graphic Novel")
-
-# On the other hand, de-generalizing Fiction books
-gr_full[gr_full$Genre == "Fiction", ]%>%
-  print(n = Inf)
-
-# Respecify a few books by title
-gr_full[gr_full$Title == "Stories for Men: An Anthology", ]$Genre <- c("Short Stories")
-gr_full[gr_full$Title == "Syrup", ]$Genre <- c("Romance")
-
-# Respecify several authors, some with multiple books
-authors <- list()
-authors[["Fantasy"]] <- c("J.R.R. Tolkien", "J.K. Rowling", "China Miéville", "George R.R. Martin")
-authors[["Mystery"]] <- c("Stieg Larsson")
-authors[["Thriller"]]<- c("Robert Ludlum", "Dan Brown", "Tom Clancy")
-authors[["Romance"]] <- c("Emily Giffin")
-authors[["Science Fiction"]] <- c("Ted Chiang", "Neal Stephenson", "Margaret Atwood", "Iain M. Banks", "William Gibson")
-
-for (i in 1:length(authors)) {
-  gr_full[gr_full$Author %in% authors[[i]] & gr_full$Genre == "Fiction", ]$Genre <- names(authors)[i]
-  # condition is augmented so we don't reassign books outside of the Ficion genre by these authors
-}
-
-# Initial Plot: Still too many genres
-ggplot(gr_full, aes(x = MyRating, y= AverageRating, color = Genre)) + 
-  geom_jitter()
-
-
-# Common Genres
-common_genres <- gr_full %>%
   group_by(Genre) %>%
-  tally() %>%
-  filter(n > 4) %>%
-  arrange(desc(n)) %>%
-  print(n = Inf)
+  arrange(Genre)
 
-
-subset(gr_full, Genre%in% unlist(common_genres)) %>%
-  ggplot(aes(x = MyRating, y= AverageRating, color = Genre)) + 
-  geom_jitter()
-
-
-lm_genre <- lm(formula = AverageRating~MyRating, 
-               data = gr_full %>% group_by(Genre),
-               subset = Genre %in% unlist(common_genres))
-
-subset(gr_full, Genre%in% unlist(common_genres)) %>%
-  ggplot(aes(MyRating, AverageRating, color = Genre)) + 
-  geom_jitter() +
-  geom_smooth(aes(MyRating, AverageRating))
 
 # Reducing to 4 Genres
-fic_genres <- c("Horror", "Young Adult", "Historical", "Thriller", 
-                "Mystery", "Classics", "Short Stories", "Childrens", 
-                "Graphic Novel", "Romance", "Adventure")
-nonfic_genres <- c("History", "Poetry")
+gr7 <- gr6
 
-gr_4genre <- gr_full
-gr_4genre[gr_4genre$Genre %in% fic_genres, ]$Genre <- c("Fiction")
-gr_4genre[gr_4genre$Genre %in% nonfic_genres, ]$Genre <- c("Nonfiction")
+genres <- list()
+genres[["Fiction"]] <- c("Young Adult", "Historical", "Thriller", 
+                         "Mystery", "Classics", "Short Stories", "Childrens", 
+                         "Romance", "Womens Fiction")
+genres[["Fantasy"]] <- c("Horror", "Dungeons and Dragons", "Paranormal")
+genres[["Science Fiction"]] <- c("Gothic", "Adventure", "Anthologies", "Sequential Art")
+genres[["Nonfiction"]] <- c("History", "Food and Drink", "Philosophy", "Autobiography",
+                            "Biography", "Poetry", "Writing")
 
-# checking
-gr_4genre %>%
+for (i in 1:length(genres)) {
+  gr7[gr6$Genre %in% genres[[i]], ]$Genre <- names(genres)[i]
+}
+
+
+# Verifying genre reduction
+gr7 %>%
   group_by(Genre) %>%
   tally() %>%
   arrange(desc(n)) %>%
   print(n = Inf)
 
-# regraphing
-  ggplot(gr_4genre, aes(MyRating, AverageRating, color = Genre)) + 
-  geom_jitter() +
-  geom_smooth(aes(MyRating, AverageRating, fill = Genre))
+ggplot(gr7, aes(Genre, fill = Genre)) + geom_bar()
 
-  gr_4genre %>% group_by(Genre) %>%
-    ggplot(aes(MyRating, AverageRating, color = Genre)) +
-    geom_point() +
-    geom_smooth(aes(MyRating, AverageRating, fill = Genre), alpha = 0.2) +
-    facet_grid(. ~ Genre)
 
-gr_4genre %>%
-    ggplot(aes(MyRating, AverageRating)) +
-      geom_boxplot() +
-      facet_grid(. ~Genre)
-    
+# Initial Distribution per MyRating
+ggplot(gr7, aes(x= MyRating)) +
+  geom_bar(fill = "lightblue") +
+  ggtitle("Initial Distribution by MyRating") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+# Initial AverageRating~MyRating Plot
+plot1 <- ggplot(gr7, aes(x= MyRating, fill= YearRead)) +
+  geom_bar(position = "dodge") +
+  scale_x_continuous(breaks = 0:5) +
+  ggtitle("Fig 1a: Books per MyRating by YearRead") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+print(plot1)
+
+
+# Stripping out 0 Rating books
+gr8 <- gr7[-which(gr7$MyRating == 0),]
+
+plot2 <- ggplot(gr8, aes(x=MyRating, fill = YearRead)) +
+  geom_bar(position = "dodge") +
+  scale_x_continuous(breaks = 0:5) +
+  ggtitle("Fig 1b: Rated Books per MyRating by YearRead") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+print(plot2)
+
+plot3 <- ggplot(gr8, aes(x=MyRating, fill= Genre)) +
+  geom_bar(position="dodge") + 
+  ggtitle("Fig 2: Distribution of MyRating by Genre") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+print(plot3)
+
+#### Analysis
+# General distribution of across YearRead and Genre
+# Is there a relationship between AverageRating and MyRating
+# Is this relationship affected by Genre?
+# Is this relationship affected by YearRead?
+
+plot4 <- ggplot(gr8, aes(x=MyRating, fill= Genre)) +
+  geom_bar(position="dodge") + 
+  facet_grid(~Genre) +
+  ggtitle("Distribution of MyRating by Genre") +
+  theme(plot.title = element_text(size= 11, hjust= 0.696))
+
+plot5 <- ggplot(gr8, aes(x=MyRating, fill= YearRead)) +
+  geom_bar(position="dodge") +
+  facet_wrap(~YearRead) + 
+  ggtitle("Distribution of MyRating by YearRead") +
+  theme(plot.title = element_text(size= 11, hjust= 0.696))
+
+grid.arrange(plot4, plot5, top= "Fig 3: Exploratory Distributions")
+
+plot_hist <- ggplot(gr8, aes(x=AverageRating)) +
+    geom_histogram(bins = 30, fill = "lightgreen") +
+    ggtitle("AverageRating Histogram")
+
+plot_density <- ggplot(gr8, aes(x=AverageRating)) +
+  geom_density(aes(y=..scaled..), fill="lightgreen", linetype = 0) +
+  ggtitle("AverageRating Density Plot")
+
+grid.arrange(plot_hist, plot_density, top = "Distribution of AverageRating")
+
+#### Linear Regression in Ratings
+plot6 <- ggplot(gr8, aes(x=MyRating, y=AverageRating, group=MyRating))+
+  geom_boxplot() +
+  scale_y_continuous(limits = c(2, 5)) +
+  ggtitle("Distribution of AverageRating by MyRating") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+plot7 <- ggplot(gr8, aes(x=MyRating, y=AverageRating)) +
+  geom_point(pos= position_jitter(0.04), alpha= 0.3, shape= 16, size= 3) +
+  geom_smooth(method = "lm", se = F) + 
+  scale_y_continuous(limits = c(2, 5)) + 
+  scale_x_continuous(breaks = 0:5) +
+  ggtitle("Linear Regression of AverageRating by MyRating") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+grid.arrange(plot6, plot7, top= "Fig 3: Exploring Relationship between AverageRating and MyRating")
+
+
+lm_rating <- lm(AverageRating ~ MyRating, gr8)
+anova(lm_rating)
+coef(lm_rating)[1]
+
+
+
+# LinReg by Genre
+plot7 <- ggplot(gr8, aes(MyRating, AverageRating)) +
+  geom_point(position = position_jitter(0.2), alpha = 0.5, aes(color = Genre)) +
+  geom_segment(aes(x=1, xend=5, 
+                   y= coef(lm_rating)[1] + coef(lm_rating)[2], 
+                   yend= coef(lm_rating)[1] + length(unique(gr8$MyRating))*coef(lm_rating)[2]),
+               size = 1) +
+  facet_grid(. ~ Genre) +
+  geom_smooth(method = "lm", se = F, aes(color = Genre)) +
+  scale_y_continuous(limits = c(2, 5)) + 
+  scale_x_continuous(breaks = 0:5) +
+  ggtitle("Fig 4: AverageRating by MyRating for each Genre") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+print(plot7)
+
+
+# LinReg by YearRead
+plot8 <- ggplot(gr8, aes(MyRating, AverageRating)) +
+  geom_point(position = position_jitter(0.2), alpha = 0.5, aes(color = YearRead)) +
+  geom_segment(aes(x=1, xend=5, 
+                   y= lm_rating[[1]][1] + lm_rating[[1]][2], 
+                   yend= lm_rating[[1]][1] + 5*lm_rating[[1]][2]),
+               size = 1) +
+  facet_grid(. ~ YearRead) +
+  geom_smooth(method = "lm", se = F, aes(color = YearRead)) +
+  scale_x_continuous(breaks = 0:5) +
+  ggtitle("Fig 4: AverageRating by MyRating for each YearRead") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5))
+
+print(plot8)
+
+
+
+#### WIP
+
+gr8 %>% group_by(YearRead) %>%
+  ggplot(aes(MyRating, AverageRating, color = Genre, fill = Genre)) +
+  geom_point(position = position_jitter(0.2), alpha = 0.5) +
+  facet_grid(. ~ YearRead) +
+  geom_smooth(method = "lm", se = F) + 
+  ggtitle("Fig: Rating Relationship by Year and Genre") +
+  theme(plot.title = element_text(size= 11, hjust= 0.5)) +
+  scale_y_continuous(limits = c(2, 5)) + 
+  scale_x_continuous(breaks = 0:5)
+
+
+
+gr8[which(gr8$YearRead %in% c(2016, 2017)),]%>% group_by(YearRead) %>%
+  ggplot(aes(MyRating, AverageRating, color = Genre, fill = Genre)) +
+  geom_point(position = position_jitter(0.1)) +
+  facet_grid(. ~ YearRead) +
+  geom_smooth(method = "lm", se = F) + 
+  scale_y_continuous(limits = c(2, 5)) + 
+  scale_x_continuous(breaks = 0:5)
+
+
+
+
+
+
+
+
